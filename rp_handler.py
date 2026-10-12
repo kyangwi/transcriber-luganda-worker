@@ -13,6 +13,39 @@ from typing import List, Dict, Optional, Tuple
 import numpy as np
 import torch
 
+# ====== FIX AIOHTTP / BROTLI DECOMPRESSOR COMPATIBILITY ======
+try:
+    import aiohttp
+    _orig_aiohttp_session_init = aiohttp.ClientSession.__init__
+
+    def _safe_aiohttp_session_init(self, *args, **kwargs):
+        headers = kwargs.get("headers")
+        if headers is None:
+            headers = {}
+        elif not isinstance(headers, dict):
+            headers = dict(headers)
+        headers.setdefault("Accept-Encoding", "gzip, deflate")
+        kwargs["headers"] = headers
+        return _orig_aiohttp_session_init(self, *args, **kwargs)
+
+    aiohttp.ClientSession.__init__ = _safe_aiohttp_session_init
+except Exception:
+    pass
+
+try:
+    import brotli
+    if hasattr(brotli, "Decompressor") and not hasattr(brotli.Decompressor, "is_finished"):
+        brotli.Decompressor.is_finished = lambda self: False
+except Exception:
+    pass
+
+try:
+    import brotlicffi
+    if hasattr(brotlicffi, "Decompressor") and not hasattr(brotlicffi.Decompressor, "is_finished"):
+        brotlicffi.Decompressor.is_finished = lambda self: False
+except Exception:
+    pass
+
 try:
     import runpod
 except ImportError:

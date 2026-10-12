@@ -17,7 +17,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Install python dependencies for RunPod, Whisper, and Diarization
 RUN pip install --no-cache-dir \
     runpod \
-    brotlicffi \
     brotli \
     "aiohttp[speedups]" \
     faster-whisper \
