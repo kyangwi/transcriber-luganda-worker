@@ -179,12 +179,15 @@ def get_luganda_pipeline():
         logger.info(f"Loading Luganda Whisper model [{LUGANDA_MODEL_ID}] on {DEVICE}...")
         load_kwargs = {
             "torch_dtype": TORCH_DTYPE,
-            "use_safetensors": True,
+            "low_cpu_mem_usage": True,
         }
         if HF_TOKEN:
             load_kwargs["token"] = HF_TOKEN
 
-        model = AutoModelForSpeechSeq2Seq.from_pretrained(LUGANDA_MODEL_ID, **load_kwargs)
+        try:
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(LUGANDA_MODEL_ID, use_safetensors=True, **load_kwargs)
+        except Exception:
+            model = AutoModelForSpeechSeq2Seq.from_pretrained(LUGANDA_MODEL_ID, **load_kwargs)
         model.to(DEVICE)
         processor = AutoProcessor.from_pretrained(LUGANDA_MODEL_ID, token=HF_TOKEN)
 

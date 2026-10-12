@@ -1,5 +1,5 @@
-# Use PyTorch runtime image with CUDA 12.1 GPU support
-FROM pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+# Use PyTorch runtime image with modern CUDA 12.4 GPU support
+FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime
 
 # Set environment
 ENV DEBIAN_FRONTEND=noninteractive
@@ -20,8 +20,8 @@ RUN pip install --no-cache-dir \
     brotli \
     "aiohttp[speedups]" \
     faster-whisper \
-    transformers \
-    accelerate \
+    "transformers>=4.40.0,<4.47.0" \
+    "accelerate>=0.28.0" \
     funasr \
     modelscope \
     scikit-learn \
