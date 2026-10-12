@@ -28,22 +28,25 @@ if not os.path.exists(audio_file):
 print(f"🚀 Testing RunPod Serverless Endpoint [{ENDPOINT_ID}] with audio: {audio_file}")
 
 file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
-if file_size_mb > 13.0:
-    print(f"⚠️ Audio is {file_size_mb:.1f} MB (exceeds RunPod 20MB payload limit). Auto-optimizing to 16kHz mono...")
+if file_size_mb > 12.0:
+    print(f"⚠️ Audio is {file_size_mb:.1f} MB (exceeds RunPod 20MB limit). Downsampling to 16kHz mono...")
     import tempfile
     from pydub import AudioSegment
     sound = AudioSegment.from_file(audio_file)
+    duration_sec = max(1.0, len(sound) / 1000.0)
+    target_kbps = max(16, min(48, int((10 * 1024 * 8) / duration_sec)))
     sound = sound.set_channels(1).set_frame_rate(16000)
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_path = tmp.name
-    sound.export(tmp_path, format="mp3", bitrate="32k")
+    sound.export(tmp_path, format="mp3", bitrate=f"{target_kbps}k")
+    opt_size_mb = os.path.getsize(tmp_path) / (1024 * 1024)
     with open(tmp_path, "rb") as f:
         audio_b64 = base64.b64encode(f.read()).decode("utf-8")
     try:
         os.remove(tmp_path)
     except Exception:
         pass
-    print(f"✓ Optimized payload: {len(audio_b64)/(1024*1024):.1f} MB Base64.")
+    print(f"✓ Shrunk {file_size_mb:.1f} MB -> {opt_size_mb:.1f} MB ({target_kbps}kbps mono). Base64 payload: {len(audio_b64)/(1024*1024):.1f} MB.")
 else:
     with open(audio_file, "rb") as f:
         audio_b64 = base64.b64encode(f.read()).decode("utf-8")
