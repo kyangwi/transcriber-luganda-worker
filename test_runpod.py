@@ -5,6 +5,11 @@ import base64
 import requests
 from dotenv import load_dotenv
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 load_dotenv()
 
 API_KEY = os.getenv("RUNPOD_API_KEY")
@@ -22,8 +27,26 @@ if not os.path.exists(audio_file):
 
 print(f"🚀 Testing RunPod Serverless Endpoint [{ENDPOINT_ID}] with audio: {audio_file}")
 
-with open(audio_file, "rb") as f:
-    audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
+if file_size_mb > 13.0:
+    print(f"⚠️ Audio is {file_size_mb:.1f} MB (exceeds RunPod 20MB payload limit). Auto-optimizing to 16kHz mono...")
+    import tempfile
+    from pydub import AudioSegment
+    sound = AudioSegment.from_file(audio_file)
+    sound = sound.set_channels(1).set_frame_rate(16000)
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+        tmp_path = tmp.name
+    sound.export(tmp_path, format="mp3", bitrate="32k")
+    with open(tmp_path, "rb") as f:
+        audio_b64 = base64.b64encode(f.read()).decode("utf-8")
+    try:
+        os.remove(tmp_path)
+    except Exception:
+        pass
+    print(f"✓ Optimized payload: {len(audio_b64)/(1024*1024):.1f} MB Base64.")
+else:
+    with open(audio_file, "rb") as f:
+        audio_b64 = base64.b64encode(f.read()).decode("utf-8")
 
 url = f"https://api.runpod.ai/v2/{ENDPOINT_ID}/runsync"
 headers = {
