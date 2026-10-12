@@ -468,7 +468,7 @@ stream_tracker = StreamingSpeakerTracker()
 
 
 # ====== MAIN HANDLER ======
-def handle_transcribe(job_input: dict) -> dict:
+def handle_transcribe(job_input: dict, job: dict = None) -> dict:
     audio_path = decode_input_audio(
         audio_base64=job_input.get("audio_base64"),
         audio_url=job_input.get("audio_url")
@@ -487,6 +487,17 @@ def handle_transcribe(job_input: dict) -> dict:
     clean_raw_text = ""
 
     t0 = time.time()
+
+    if runpod is not None and job is not None:
+        try:
+            runpod.serverless.progress_update(job, {
+                "stage": "transcribing",
+                "progress_pct": 35,
+                "message": f"Neural Speech Recognition ({language})...",
+                "subtext": "Transcribing audio segments on Cloud GPU..."
+            })
+        except Exception:
+            pass
 
     try:
         if is_luganda:
@@ -531,6 +542,16 @@ def handle_transcribe(job_input: dict) -> dict:
 
         # Diarization
         if diarize and chunks:
+            if runpod is not None and job is not None:
+                try:
+                    runpod.serverless.progress_update(job, {
+                        "stage": "diarizing",
+                        "progress_pct": 72,
+                        "message": "Acoustic Speaker Diarization...",
+                        "subtext": "Extracting voiceprints with FSMN-VAD & Alibaba CAM++..."
+                    })
+                except Exception:
+                    pass
             logger.info("Executing Acoustic Speaker Diarization...")
             ac_formatted, _ = diarize_chunks(audio_path, chunks, num_speakers=num_speakers)
             if ac_formatted:
@@ -643,7 +664,7 @@ def handler(job):
 
     try:
         if action == "transcribe":
-            return handle_transcribe(job_input)
+            return handle_transcribe(job_input, job=job)
         elif action == "diarize":
             return handle_diarize(job_input)
         elif action == "stream_chunk":
