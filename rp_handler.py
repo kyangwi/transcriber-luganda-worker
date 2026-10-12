@@ -188,8 +188,21 @@ def get_luganda_pipeline():
             model = AutoModelForSpeechSeq2Seq.from_pretrained(LUGANDA_MODEL_ID, use_safetensors=True, **load_kwargs)
         except Exception:
             model = AutoModelForSpeechSeq2Seq.from_pretrained(LUGANDA_MODEL_ID, **load_kwargs)
-        model.to(DEVICE)
-        processor = AutoProcessor.from_pretrained(LUGANDA_MODEL_ID, token=HF_TOKEN)
+        try:
+            processor = AutoProcessor.from_pretrained(
+                LUGANDA_MODEL_ID,
+                token=HF_TOKEN,
+                language="swahili",
+                task="transcribe"
+            )
+        except Exception:
+            processor = AutoProcessor.from_pretrained(LUGANDA_MODEL_ID, token=HF_TOKEN)
+
+        if hasattr(processor, "tokenizer") and hasattr(processor.tokenizer, "set_prefix_tokens"):
+            try:
+                processor.tokenizer.set_prefix_tokens(language="swahili", task="transcribe")
+            except Exception:
+                pass
 
         luganda_pipeline = pipeline(
             "automatic-speech-recognition",
@@ -439,11 +452,11 @@ def handle_transcribe(job_input: dict) -> dict:
 
     try:
         if is_luganda:
-            logger.info(f"Executing Luganda Whisper model ({LUGANDA_MODEL_ID})...")
+            logger.info(f"Executing Luganda Whisper model ({LUGANDA_MODEL_ID}) with Swahili tokenizer...")
             pipe = get_luganda_pipeline()
             with torch.inference_mode():
-                lang_tag = "luganda" if "allandclive" in LUGANDA_MODEL_ID.lower() else "<|sw|>"
-                gen_kwargs = {"task": "transcribe", "language": lang_tag}
+                # Luganda Whisper models use Swahili (<|sw|>) token prefix
+                gen_kwargs = {"task": "transcribe", "language": "swahili"}
                 res = pipe(audio_path, return_timestamps=True, generate_kwargs=gen_kwargs)
             chunks = res.get("chunks", [])
             if chunks:
