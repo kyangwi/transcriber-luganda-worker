@@ -35,7 +35,7 @@ payload = {
     "input": {
         "action": "transcribe",
         "audio_base64": audio_b64,
-        "language": "Luganda" if "lg" in audio_file.lower() else "English",
+        "language": "Luganda" if "lg" in audio_file.lower() else "en",
         "diarize": True
     }
 }

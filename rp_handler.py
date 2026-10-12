@@ -159,6 +159,42 @@ def filter_streaming_hallucinations(text: str) -> str:
     return re.sub(r'\s+', ' ', cleaned).strip()
 
 
+LANGUAGE_CODE_MAP = {
+    "english": "en",
+    "swahili": "sw",
+    "french": "fr",
+    "spanish": "es",
+    "german": "de",
+    "italian": "it",
+    "portuguese": "pt",
+    "russian": "ru",
+    "chinese": "zh",
+    "mandarin": "zh",
+    "japanese": "ja",
+    "korean": "ko",
+    "arabic": "ar",
+    "hindi": "hi",
+    "lingala": "ln",
+    "yoruba": "yo",
+    "somali": "so",
+    "amharic": "am",
+    "hausa": "ha",
+    "oromo": "om",
+    "dutch": "nl",
+    "turkish": "tr",
+    "polish": "pl",
+    "ukrainian": "uk",
+    "vietnamese": "vi",
+}
+
+
+def normalize_faster_whisper_lang(lang: Optional[str]) -> Optional[str]:
+    if not lang or str(lang).lower().strip() in ("auto", "none", ""):
+        return None
+    cleaned = str(lang).lower().strip()
+    return LANGUAGE_CODE_MAP.get(cleaned, cleaned)
+
+
 # ====== MODEL LOADERS ======
 def get_faster_whisper():
     global faster_whisper_model
@@ -466,7 +502,7 @@ def handle_transcribe(job_input: dict) -> dict:
         else:
             logger.info(f"Executing Faster Whisper for language: {language}...")
             fw = get_faster_whisper()
-            target_lang = None if language.lower() in ("auto", "") else language.lower()
+            target_lang = normalize_faster_whisper_lang(language)
             segs, info = fw.transcribe(
                 audio_path,
                 language=target_lang,
