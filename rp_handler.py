@@ -86,10 +86,12 @@ def decode_input_audio(audio_base64: Optional[str] = None, audio_url: Optional[s
         return temp_path
 
     if audio_url:
+        logger.info(f"Downloading audio from URL: {audio_url[:80]}...")
         headers = {"User-Agent": "Mozilla/5.0"}
         req = urllib.request.Request(audio_url, headers=headers)
-        with urllib.request.urlopen(req, timeout=30) as resp, open(temp_path, "wb") as f:
-            f.write(resp.read())
+        with urllib.request.urlopen(req, timeout=180) as resp, open(temp_path, "wb") as f:
+            shutil.copyfileobj(resp, f)
+        logger.info(f"Audio downloaded successfully ({os.path.getsize(temp_path)/(1024*1024):.1f} MB).")
         return temp_path
 
     raise ValueError("Neither audio_base64 nor audio_url was provided.")
