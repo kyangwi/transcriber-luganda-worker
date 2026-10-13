@@ -657,6 +657,34 @@ def handle_stream_chunk(job_input: dict) -> dict:
                 pass
 
 
+def warmup_streaming_models():
+    """
+    Pre-loads Faster Whisper and CAM++ speaker diarization models into GPU VRAM
+    and executes a short dummy tensor pass so PyTorch & CTranslate2 CUDA contexts,
+    kernels, and memory allocations are 100% warm before any user request arrives.
+    """
+    logger.info("--> [WARMUP] Pre-loading Faster Whisper and CAM++ models in GPU memory...")
+    t0 = time.time()
+    try:
+        fw = get_faster_whisper()
+        dummy_pcm = np.zeros(3200, dtype=np.float32)  # 0.2s silence
+        list(fw.transcribe(dummy_pcm, language="en", beam_size=1, vad_filter=False)[0])
+        logger.info(f"--> [WARMUP] Faster Whisper ({FASTER_WHISPER_SIZE}) ready & CUDA context hot.")
+    except Exception as e:
+        logger.warning(f"--> [WARMUP] Faster Whisper pre-warm warning: {e}")
+
+    try:
+        _, cam = get_diarization_models()
+        if cam is not None:
+            dummy_pcm = np.zeros(16000, dtype=np.float32)  # 1.0s silence
+            cam.generate(input=dummy_pcm, fs=16000)
+            logger.info("--> [WARMUP] CAM++ speaker diarization model ready & hot.")
+    except Exception as e:
+        logger.warning(f"--> [WARMUP] Diarization pre-warm warning: {e}")
+
+    logger.info(f"--> [WARMUP] All streaming models fully warmed up in {time.time() - t0:.2f}s.")
+
+
 def handler(job):
     """RunPod Serverless Master Handler"""
     job_input = job.get("input", {})
@@ -669,7 +697,8 @@ def handler(job):
             return handle_diarize(job_input)
         elif action == "stream_chunk":
             return handle_stream_chunk(job_input)
-        elif action in ("ping", "health"):
+        elif action in ("ping", "health", "warmup"):
+            warmup_streaming_models()
             return {
                 "status": "ready",
                 "device": DEVICE,
@@ -685,9 +714,11 @@ def handler(job):
 
 
 if __name__ == "__main__":
+    warmup_streaming_models()
     if runpod is not None:
         runpod.serverless.start({"handler": handler})
     else:
         logger.info("Runpod package not detected. Running verification tests locally...")
         print("Device:", DEVICE)
         print("Models can be verified on container start.")
+

@@ -28,13 +28,13 @@ if not os.path.exists(audio_file):
 print(f"🚀 Testing RunPod Serverless Endpoint [{ENDPOINT_ID}] with audio: {audio_file}")
 
 file_size_mb = os.path.getsize(audio_file) / (1024 * 1024)
-if file_size_mb > 12.0:
-    print(f"⚠️ Audio is {file_size_mb:.1f} MB (exceeds RunPod 20MB limit). Downsampling to 16kHz mono...")
+if file_size_mb > 5.0:
+    print(f"⚠️ Audio is {file_size_mb:.1f} MB (exceeds safe 5MB limit). Downsampling to 16kHz mono...")
     import tempfile
     from pydub import AudioSegment
     sound = AudioSegment.from_file(audio_file)
     duration_sec = max(1.0, len(sound) / 1000.0)
-    target_kbps = max(16, min(48, int((10 * 1024 * 8) / duration_sec)))
+    target_kbps = max(16, min(32, int((4.2 * 1024 * 8) / duration_sec)))
     sound = sound.set_channels(1).set_frame_rate(16000)
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_path = tmp.name
