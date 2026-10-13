@@ -510,8 +510,8 @@ def handle_transcribe(job_input: dict, job: dict = None) -> dict:
             runpod.serverless.progress_update(job, {
                 "stage": "transcribing",
                 "progress_pct": 35,
-                "message": f"Neural Speech Recognition ({language})...",
-                "subtext": "Transcribing audio segments on Cloud GPU..."
+                "message": f"Transcribing Speech ({language})...",
+                "subtext": "Converting audio segments to text..."
             })
         except Exception:
             pass
@@ -564,8 +564,8 @@ def handle_transcribe(job_input: dict, job: dict = None) -> dict:
                     runpod.serverless.progress_update(job, {
                         "stage": "diarizing",
                         "progress_pct": 72,
-                        "message": "Acoustic Speaker Diarization...",
-                        "subtext": "Extracting voiceprints with FSMN-VAD & Alibaba CAM++..."
+                        "message": "Identifying Speakers...",
+                        "subtext": "Separating voices and attributing dialogue..."
                     })
                 except Exception:
                     pass
