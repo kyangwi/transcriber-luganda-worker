@@ -66,6 +66,7 @@ logger.info(f"Target Device: {DEVICE} | Torch DType: {TORCH_DTYPE}")
 # Global model references
 luganda_pipeline = None
 faster_whisper_model = None
+sensevoice_model = None
 vad_model = None
 cam_model = None
 
@@ -139,21 +140,22 @@ def format_seconds_to_timestamp(seconds: float) -> str:
 def filter_streaming_hallucinations(text: str) -> str:
     if not text:
         return ""
+    # Strip musical symbols & subtitle audio tags
     cleaned = re.sub(r'[\u2669-\u266f\U0001f3b5-\U0001f3bc♪♫♬♭♮♯🎼🎶🎵]', '', text)
     cleaned = re.sub(r'\[\s*["\'].*?["\']\s*\]', '', cleaned)
     cleaned = re.sub(r'\[(?:music|applause|laughter|bgm|silence|cheering|singing|audio|sound|noise)\]', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r'\((?:music|applause|laughter|bgm|silence|cheering|singing|audio|sound|noise)\)', '', cleaned, flags=re.IGNORECASE)
 
+    # Strip SenseVoice rich emotion & audio event tags (<|en|>, <|NEUTRAL|>, <|Speech|>, etc.)
+    cleaned = re.sub(r'<\|.*?\|>', '', cleaned)
+
+    # Only filter actual YouTube / subtitle hallucinations (greetings like 'Hello', 'Hi', 'Thanks' are PRESERVED)
     norm = re.sub(r'[^a-zA-Z\s]', '', cleaned).lower().strip()
-    words = norm.split()
-    PHANTOM_PATTERNS = {
-        "yeah", "yeha", "yep", "yes", "mhm", "uhhuh", "uh huh", "hello", "hi", "hey",
-        "thank you", "thanks", "thanks for watching", "bye", "bye bye", "you", "the", "so", "ok"
+    SPAM_PATTERNS = {
+        "thanks for watching", "thank you for watching", "please subscribe",
+        "like and subscribe", "subtitles by", "transcript by", "closed captions"
     }
-    phrase = " ".join(words)
-    if not phrase or phrase in PHANTOM_PATTERNS:
-        return ""
-    if len(words) <= 1 and (len(phrase) <= 3 or phrase in PHANTOM_PATTERNS):
+    if norm in SPAM_PATTERNS:
         return ""
 
     filler_pattern = r'(?i)\b(u+h+|u+m+|u+n+h+|e+h+|e+r+|a+h+|h+m+|m+h+m+|u+h+m+|u+m+h+)\b'
@@ -198,6 +200,21 @@ def normalize_faster_whisper_lang(lang: Optional[str]) -> Optional[str]:
 
 
 # ====== MODEL LOADERS ======
+def get_sensevoice():
+    global sensevoice_model
+    if sensevoice_model is None:
+        from funasr import AutoModel
+        dev = "cuda:0" if torch.cuda.is_available() else "cpu"
+        logger.info(f"Loading SenseVoiceSmall ASR model on {dev}...")
+        try:
+            sensevoice_model = AutoModel(model="iic/SenseVoiceSmall", device=dev, disable_update=True)
+            logger.info("SenseVoiceSmall loaded successfully.")
+        except Exception as e:
+            logger.warning(f"Failed loading SenseVoice on {dev}: {e}. Retrying CPU...")
+            sensevoice_model = AutoModel(model="iic/SenseVoiceSmall", device="cpu", disable_update=True)
+    return sensevoice_model
+
+
 def get_faster_whisper():
     global faster_whisper_model
     if faster_whisper_model is None:
@@ -629,17 +646,34 @@ def handle_stream_chunk(job_input: dict) -> dict:
     t0 = time.time()
 
     try:
-        fw = get_faster_whisper()
-        segs, _ = fw.transcribe(audio_path, language=target_lang, beam_size=1, vad_filter=False, temperature=0.0)
-        text_parts = [s.text.strip() for s in segs]
-        raw_text = " ".join(text_parts).strip()
-        cleaned = filter_streaming_hallucinations(raw_text)
+        raw_text = ""
+        # 1. Transcribe with SenseVoice-Small (Ultra-fast non-autoregressive ASR, ~25ms inference)
+        try:
+            sv = get_sensevoice()
+            res = sv.generate(input=audio_path, language=target_lang, use_itn=True)
+            if isinstance(res, list) and len(res) > 0:
+                first = res[0]
+                raw_text = first.get("text", "") if isinstance(first, dict) else str(first)
+            elif isinstance(res, dict):
+                raw_text = res.get("text", "")
+            elif isinstance(res, str):
+                raw_text = res
 
+            # Strip SenseVoice rich emotion & audio event tags: <|en|>, <|NEUTRAL|>, <|Speech|>, etc.
+            raw_text = re.sub(r'<\|.*?\|>', '', raw_text).strip()
+        except Exception as sv_err:
+            logger.warning(f"SenseVoice inference fallback to Faster Whisper: {sv_err}")
+            fw = get_faster_whisper()
+            segs, _ = fw.transcribe(audio_path, language=target_lang, beam_size=1, vad_filter=False, temperature=0.0)
+            raw_text = " ".join(s.text.strip() for s in segs).strip()
+
+        cleaned = filter_streaming_hallucinations(raw_text)
         elapsed_ms = int((time.time() - t0) * 1000)
 
         if not cleaned:
             return {"status": "success", "text": "", "speaker": "", "is_speech": False, "latency_ms": elapsed_ms}
 
+        # 2. Identify speaker via CAM++ voiceprint embedding
         spk_info = stream_tracker.identify_speaker(session_id, audio_path, text=cleaned)
         return {
             "status": "success",
@@ -653,36 +687,71 @@ def handle_stream_chunk(job_input: dict) -> dict:
         if os.path.exists(audio_path):
             try:
                 os.remove(audio_path)
+
             except Exception:
                 pass
 
 
-def warmup_streaming_models():
+def warmup_all_models():
     """
-    Pre-loads Faster Whisper and CAM++ speaker diarization models into GPU VRAM
-    and executes a short dummy tensor pass so PyTorch & CTranslate2 CUDA contexts,
-    kernels, and memory allocations are 100% warm before any user request arrives.
+    Comprehensive startup warmup: loads and pre-initializes ALL models
+    (SenseVoiceSmall, CAM++, FSMN-VAD, Faster Whisper, and Luganda Whisper)
+    into GPU VRAM and executes a short dummy tensor inference so that
+    CUDA execution graphs, kernel compilations, and memory allocations
+    are 100% warm before the container begins serving user traffic.
     """
-    logger.info("--> [WARMUP] Pre-loading Faster Whisper and CAM++ models in GPU memory...")
-    t0 = time.time()
-    try:
-        fw = get_faster_whisper()
-        dummy_pcm = np.zeros(3200, dtype=np.float32)  # 0.2s silence
-        list(fw.transcribe(dummy_pcm, language="en", beam_size=1, vad_filter=False)[0])
-        logger.info(f"--> [WARMUP] Faster Whisper ({FASTER_WHISPER_SIZE}) ready & CUDA context hot.")
-    except Exception as e:
-        logger.warning(f"--> [WARMUP] Faster Whisper pre-warm warning: {e}")
+    logger.info("=" * 65)
+    logger.info("--> [CONTAINER STARTUP] Pre-warming ALL models in GPU VRAM...")
+    logger.info("=" * 65)
+    t_start = time.time()
 
+    # 1. SenseVoice-Small (Real-Time Streaming Engine)
     try:
-        _, cam = get_diarization_models()
+        t0 = time.time()
+        sv = get_sensevoice()
+        dummy_1s = np.zeros(16000, dtype=np.float32)
+        sv.generate(input=dummy_1s, language="en", use_itn=True)
+        logger.info(f"✓ [1/4] SenseVoice-Small streaming model warmed up ({time.time() - t0:.2f}s)")
+    except Exception as e:
+        logger.warning(f"⚠️ [1/4] SenseVoice-Small warmup note: {e}")
+
+    # 2. FSMN-VAD & CAM++ (Acoustic Diarization & Voiceprints)
+    try:
+        t0 = time.time()
+        vad, cam = get_diarization_models()
+        dummy_1s = np.zeros(16000, dtype=np.float32)
+        if vad is not None:
+            vad.generate(input=dummy_1s, fs=16000)
         if cam is not None:
-            dummy_pcm = np.zeros(16000, dtype=np.float32)  # 1.0s silence
-            cam.generate(input=dummy_pcm, fs=16000)
-            logger.info("--> [WARMUP] CAM++ speaker diarization model ready & hot.")
+            cam.generate(input=dummy_1s, fs=16000)
+        logger.info(f"✓ [2/4] FSMN-VAD & CAM++ Diarization models warmed up ({time.time() - t0:.2f}s)")
     except Exception as e:
-        logger.warning(f"--> [WARMUP] Diarization pre-warm warning: {e}")
+        logger.warning(f"⚠️ [2/4] Diarization warmup note: {e}")
 
-    logger.info(f"--> [WARMUP] All streaming models fully warmed up in {time.time() - t0:.2f}s.")
+    # 3. Faster Whisper Medium (General Multilingual Batch STT)
+    try:
+        t0 = time.time()
+        fw = get_faster_whisper()
+        dummy_short = np.zeros(3200, dtype=np.float32)
+        list(fw.transcribe(dummy_short, language="en", beam_size=1, vad_filter=False)[0])
+        logger.info(f"✓ [3/4] Faster Whisper ({FASTER_WHISPER_SIZE}) warmed up ({time.time() - t0:.2f}s)")
+    except Exception as e:
+        logger.warning(f"⚠️ [3/4] Faster Whisper warmup note: {e}")
+
+    # 4. Luganda Whisper Model
+    try:
+        t0 = time.time()
+        pipe = get_luganda_pipeline()
+        dummy_1s = np.zeros(16000, dtype=np.float32)
+        with torch.inference_mode():
+            pipe(dummy_1s, generate_kwargs={"task": "transcribe", "language": "swahili"})
+        logger.info(f"✓ [4/4] Luganda Whisper pipeline warmed up ({time.time() - t0:.2f}s)")
+    except Exception as e:
+        logger.warning(f"⚠️ [4/4] Luganda Whisper warmup note: {e}")
+
+    logger.info("=" * 65)
+    logger.info(f"--> [CONTAINER STARTUP] All models 100% warmed up in {time.time() - t_start:.2f}s!")
+    logger.info("=" * 65)
 
 
 def handler(job):
@@ -698,7 +767,7 @@ def handler(job):
         elif action == "stream_chunk":
             return handle_stream_chunk(job_input)
         elif action in ("ping", "health", "warmup"):
-            warmup_streaming_models()
+            warmup_all_models()
             return {
                 "status": "ready",
                 "device": DEVICE,
@@ -714,11 +783,12 @@ def handler(job):
 
 
 if __name__ == "__main__":
-    warmup_streaming_models()
+    warmup_all_models()
     if runpod is not None:
         runpod.serverless.start({"handler": handler})
     else:
         logger.info("Runpod package not detected. Running verification tests locally...")
         print("Device:", DEVICE)
         print("Models can be verified on container start.")
+
 
